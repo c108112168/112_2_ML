@@ -12,7 +12,12 @@ class QLearning:
         self.last_distance_x = None  # 初始化 last_distance_x
         self.ball_speed_x = 0
         self.ball_speed_y = 0
-
+    '''    
+    def print_reward_info(self, state, action, reward):
+        action_str = ["MOVE_LEFT", "NONE", "MOVE_RIGHT"][action]
+        print(f"state_= {self.previous_state}, state = {state}, action = {action_str}, reward = {reward}")
+        print("Invalid row:")  # 輸出無效的行
+    '''    
     def q_table_save(self, file_path):
         """
         將 Q 表儲存為 CSV 文件
@@ -40,21 +45,80 @@ class QLearning:
                     print("Invalid row:", row)  # 輸出無效的行
 
     def state(self, scene_info):
-        platform_x = scene_info['platform_1P'][0]  # 假設使用玩家1的板子
-        ball_x, ball_y = scene_info['ball']
+        # 取得板子和球的當前位置
+        platform_1P_x = scene_info['platform_1P'][0]  # 玩家1的板子位置（X座標）
+        platform_2P_x = scene_info['platform_2P'][0]  # 玩家2的板子位置（X座標）
+        ball_x, ball_y = scene_info['ball']           # 球的當前位置
+        ball_speed_x, ball_speed_y = scene_info['ball_speed']  # 球的當前速度
+        o_ball_speed_x, o_ball_speed_y = scene_info['ball_speed']  # 球的當前速度
 
-        if self.last_ball_position is None:
-            self.last_ball_position = (ball_x, ball_y)
-        elif scene_info['frame'] % 5 == 0:
-            # 計算座標差來獲取球的速度
-            self.ball_speed_x = ball_x - self.last_ball_position[0]
-            self.ball_speed_y = ball_y - self.last_ball_position[1]
-            self.last_ball_position = (ball_x, ball_y)
+        # 設定桌子的寬度和兩個板子的高度
+        table_width = 189
+        table_height = 500
+        platform_1P_y = 420  # 玩家1板子的高度
+        platform_2P_y = 80   # 玩家2板子的高度
+        distance_x = 0
+        original_ball_x = ball_x  # 保存原始的球的位置
+        original_ball_y = ball_y  # 保存原始的球的位置
+        time_to_wall = 0
+        # 避免球的速度為零導致的除零錯誤
+        if ball_speed_y == 0:
+            ball_speed_y = 1e-5  # 設置一個很小的值來代替零
+
+        while original_ball_y < 420 and original_ball_y > 80:
+            if ball_speed_y > 0:  # 球向下移動
+                time_to_platform_1P = (platform_1P_y - ball_y) / ball_speed_y
+                future_ball_x = ball_x + ball_speed_x * time_to_platform_1P
+
+                if future_ball_x < 0 or future_ball_x > table_width:
+                    if ball_speed_x > 0:
+                        time_to_wall = (table_width - ball_x) / ball_speed_x
+                        ball_x += ball_speed_x * int(time_to_wall)
+                    else:
+                        if (ball_x % ball_speed_x) != 0:
+                            ball_x += abs(ball_x % ball_speed_x)
+                        time_to_wall = -ball_x / ball_speed_x
+                        
+                        ball_x += ball_speed_x * int(time_to_wall) 
+
+                    ball_y += ball_speed_y * int(time_to_wall)
+                    ball_speed_x = -ball_speed_x  # 反射
+                else:
+                    ball_x = future_ball_x
+                    ball_y = platform_1P_y
+                    break
+
+            else:  # 球向上移動
+                time_to_platform_2P = (platform_2P_y - ball_y) / ball_speed_y
+                future_ball_x = ball_x + ball_speed_x * time_to_platform_2P
+
+                if future_ball_x < 0 or future_ball_x > table_width:
+                    if ball_speed_x > 0:
+                        time_to_wall = (table_width - ball_x) / ball_speed_x
+                        ball_x += ball_speed_x * int(time_to_wall)
+                    else:
+                        if (ball_x % ball_speed_x) != 0:
+                            ball_x += abs(ball_x % ball_speed_x)
+                        time_to_wall = -ball_x / ball_speed_x
+                        ball_x += ball_speed_x * int(time_to_wall)
+
+                    
+                    ball_y += ball_speed_y * int(time_to_wall)
+                    ball_speed_x = -ball_speed_x  # 反射
+                else:
+                    ball_x = future_ball_x
+                    ball_y = platform_2P_y
+                    break
 
         # 計算球距離板子中心點的距離（有方向性）
-        distance_x = ball_x - platform_x
+        if ball_speed_y > 0:
+            distance_x = ball_x - (platform_1P_x)
+        else:
+            distance_x = ball_x - (platform_2P_x)
+# 打印出球的座標，速度和預測落點
+        #print(f"Ball position: ({original_ball_x}, {original_ball_y}), Ball speed: ({o_ball_speed_x}, {o_ball_speed_y}), Predicted landing position: {ball_x}, time_to_wall: {time_to_wall}")
 
-        return distance_x
+        return int(distance_x)
 
     def reward(self, current_state):
         distance_x = current_state
@@ -65,11 +129,13 @@ class QLearning:
 
         # 獎勵計算：如果球變得更靠近板子中心，則加分
         if abs(distance_x) > abs(self.last_distance_x):
-            reward = 50
+            reward = 2*(abs(distance_x) - abs(self.last_distance_x))
         else:
-            reward = -10
+            reward = (abs(distance_x) - abs(self.last_distance_x))
 
         self.last_distance_x = distance_x
+        
+
         return reward
 
     def choose_action(self, state):
@@ -79,7 +145,10 @@ class QLearning:
         if random.uniform(0, 1) < self.epsilon:
             action = random.randint(0, 2)
         else:
-            action = np.argmax(self.q_table[state])
+            max_value = max(self.q_table[state])
+            max_indices = [i for i, v in enumerate(self.q_table[state]) if v == max_value]
+            action = random.choice(max_indices)
+
 
         return action
 
@@ -125,6 +194,7 @@ class MLPlay:
             
             # 獎勵系統 (這裡可以根據具體情況修改)
             reward = self.ql.reward(current_state)
+            #self.ql.print_reward_info(current_state, action_idx, reward)
 
             # 在新狀態下學習
             if self.previous_state is not None and self.previous_action is not None:
