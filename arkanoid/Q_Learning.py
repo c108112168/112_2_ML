@@ -50,30 +50,77 @@ class QLearning:
         ball_platform_diff = ball_x - platform_x
 
         return [closest_brick_x, ball_platform_diff, ball_angle]
+        
+    def reward(self, state, state_, action, scene_info):
+        ball_x, ball_y = state_[0], state_[1]
+        platform_x, platform_y = scene_info["platform"][0], scene_info["platform"][1]
+        bricks = scene_info["bricks"]
+        reward = 0
 
-# 使用範例
-if __name__ == "__main__":
-    q_learning = QLearning()
-    
-    # 模擬場景
-    scene_info = {
-        "frame": 0,
-        "status": "GAME_ALIVE",
-        "ball": [93, 395],
-        "ball_served": False,
-        "platform": [75, 400],
-        "bricks": [[50, 60], [125, 80]],
-        "hard_bricks": [[35, 50], [135, 90]]
-    }
+        # 球和磚塊的座標差
+        closest_brick_x = min([brick[0] for brick in bricks], key=lambda x: abs(x - ball_x))
+        ball_platform_diff = ball_x - platform_x
 
-    state = q_learning.state(scene_info)
-    action = q_learning.choose_action(state)
-    print(f"Selected Action: {action}")
+        # 計算球的移動角度
+        ball_angle = np.arctan2(state_[1] - state[1], state_[0] - state[0])
 
-    # 存取Q表
-    q_learning.q_table_save('q_table.csv')
-    q_learning.q_table_read('q_table.csv')
+        # 判斷條件
+        if ball_y == platform_y and platform_x <= ball_x <= platform_x + 40:  # 假設板子的寬度是40
+            reward += 5
+        if scene_info["status"] == "GAME_ALIVE":
+          reward += 1
+        if np.isclose(ball_angle, ball_platform_diff, atol=0.1):  # 假設需要考慮角度的誤差範圍
+          reward += 10
+        if platform_x <= ball_x <= platform_x + 40:
+            reward += 5
 
-    # 學習更新Q值
-    next_state = q_learning.state(scene_info)
-    q_learning.learn(state, action, reward=1, next_state=next_state)
+        if ball_y > platform_y:
+            reward -= 10
+        if ball_x < platform_x or ball_x > platform_x + 40:
+            reward -= 5
+
+        return reward
+
+class MLPlay:
+    def __init__(self, ai_name, *args, **kwargs):
+        self.ai_name = ai_name
+        self.q_learning = QLearning()
+        self.ball_served = False
+
+    def update(self, scene_info, *args, **kwargs):
+        q_learning = QLearning()
+        
+        if  'state' not in globals() or state is None:
+            state = self.q_learning.state(scene_info) 
+        if 'action' not in globals() or action is None:
+            action = 1
+            
+
+        if scene_info["status"] in ["GAME_OVER", "GAME_PASS"]:
+            return "RESET"
+        #訓練模型
+        state_ = self.q_learning.state(scene_info)        
+        reward = self.q_learning.reward(state, state_, action, scene_info)
+        q_learning.learn(state, action, reward, next_state=state_)
+        state=state_
+        
+        print(f"Selected Action: {action}")
+        
+
+        
+        if not self.ball_served:
+            command = "SERVE_TO_LEFT"
+            self.ball_served = True
+        else:
+            action = self.q_learning.choose_action(state)
+            if action == 0:
+                command = "MOVE_LEFT"
+            elif action == 1:
+                command = "STAY"
+            else:
+                command = "MOVE_RIGHT" # action
+
+        return command
+
+    def reset(self):
+        self.ball_served = False
