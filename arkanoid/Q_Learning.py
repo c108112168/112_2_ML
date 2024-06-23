@@ -1,126 +1,144 @@
-import numpy as np
-import pandas as pd
 import random
+import numpy as np
+import csv
 
 class QLearning:
-    def __init__(self, eGreedy=0.1, learning_rate=0.7, discount_factor=0.9):
-        self.eGreedy = eGreedy
-        self.learning_rate = learning_rate
-        self.discount_factor = discount_factor
+    def __init__(self, epsilon=0.1, alpha=0.1, gamma=0.9):
+        self.last_ball_position = None
         self.q_table = {}
+        self.epsilon = epsilon  # 探索率
+        self.alpha = alpha      # 學習率
+        self.gamma = gamma      # 折扣因子
+        self.last_distance_x = None  # 初始化 last_distance_x
+        self.ball_speed_x = 0
+        self.ball_speed_y = 0
+
+    def q_table_save(self, file_path):
+        """
+        將 Q 表儲存為 CSV 文件
+        """
+        with open(file_path, 'w', newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            for state, action_values in self.q_table.items():
+                writer.writerow([state, action_values[0], action_values[1], action_values[2]])
+
+    def q_table_read(self, file_path):
+        """
+        從 CSV 文件讀取 Q 表
+        """
+        with open(file_path, 'r') as csvfile:
+            reader = csv.reader(csvfile)
+            for row in reader:
+                if len(row) == 4:  # 檢查行是否包含正確的數據
+                    try:
+                        state = int(row[0])
+                        action_values = [float(row[1]), float(row[2]), float(row[3])]
+                        self.q_table[state] = action_values
+                    except ValueError:
+                        print("Invalid row:", row)  # 輸出無效的行
+                else:
+                    print("Invalid row:", row)  # 輸出無效的行
+
+    def state(self, scene_info):
+        platform_x = scene_info['platform_1P'][0]  # 假設使用玩家1的板子
+        ball_x, ball_y = scene_info['ball']
+
+        if self.last_ball_position is None:
+            self.last_ball_position = (ball_x, ball_y)
+        elif scene_info['frame'] % 5 == 0:
+            # 計算座標差來獲取球的速度
+            self.ball_speed_x = ball_x - self.last_ball_position[0]
+            self.ball_speed_y = ball_y - self.last_ball_position[1]
+            self.last_ball_position = (ball_x, ball_y)
+
+        # 計算球距離板子中心點的距離（有方向性）
+        distance_x = ball_x - platform_x
+
+        return distance_x
+
+    def reward(self, current_state):
+        distance_x = current_state
+
+        if self.last_distance_x is None:
+            self.last_distance_x = distance_x
+            return 0
+
+        # 獎勵計算：如果球變得更靠近板子中心，則加分
+        if abs(distance_x) > abs(self.last_distance_x):
+            reward = 50
+        else:
+            reward = -10
+
+        self.last_distance_x = distance_x
+        return reward
 
     def choose_action(self, state):
-        state = tuple(state)
         if state not in self.q_table:
             self.q_table[state] = [0, 0, 0]  # [左移, 不動, 右移]
-        
-        if random.uniform(0, 1) < self.eGreedy:
+
+        if random.uniform(0, 1) < self.epsilon:
             action = random.randint(0, 2)
         else:
             action = np.argmax(self.q_table[state])
-        
+
         return action
 
-    def q_table_save(self, path):
-        q_table_df = pd.DataFrame.from_dict(self.q_table, orient='index', columns=['MOVE_LEFT', 'STAY', 'MOVE_RIGHT'])
-        q_table_df.to_csv(path, index=True, header=True)
-    
-    def q_table_read(self, path):
-        q_table_df = pd.read_csv(path, index_col=0)
-        self.q_table = q_table_df.to_dict('index')
-
     def learn(self, state, action, reward, next_state):
-        state = tuple(state)
-        next_state = tuple(next_state)
-        if state not in self.q_table:
-            self.q_table[state] = [0, 0, 0]
         if next_state not in self.q_table:
             self.q_table[next_state] = [0, 0, 0]
 
-        predict = self.q_table[state][action]
-        target = reward + self.discount_factor * max(self.q_table[next_state])
-        self.q_table[state][action] += self.learning_rate * (target - predict)
-
-    def state(self, scene_info):
-        ball_x, ball_y = scene_info["ball"]
-        platform_x = scene_info["platform"][0]
-        closest_brick_x = min([brick[0] for brick in scene_info["bricks"]], key=lambda x: abs(x - ball_x))
-
-        ball_angle = np.arctan2(scene_info["ball"][1] - ball_y, scene_info["ball"][0] - ball_x)
-        ball_platform_diff = ball_x - platform_x
-
-        return [closest_brick_x, ball_platform_diff, ball_angle]
-        
-    def reward(self, state, state_, action, scene_info):
-        ball_x, ball_y = state_[0], state_[1]
-        platform_x, platform_y = scene_info["platform"][0], scene_info["platform"][1]
-        bricks = scene_info["bricks"]
-        reward = 0
-
-        # 球和磚塊的座標差
-        closest_brick_x = min([brick[0] for brick in bricks], key=lambda x: abs(x - ball_x))
-        ball_platform_diff = ball_x - platform_x
-
-        # 計算球的移動角度
-        ball_angle = np.arctan2(state_[1] - state[1], state_[0] - state[0])
-
-        # 判斷條件
-        if ball_y == platform_y and platform_x <= ball_x <= platform_x + 40:  # 假設板子的寬度是40
-            reward += 5
-        if scene_info["status"] == "GAME_ALIVE":
-          reward += 1
-        if np.isclose(ball_angle, ball_platform_diff, atol=0.1):  # 假設需要考慮角度的誤差範圍
-          reward += 10
-        if platform_x <= ball_x <= platform_x + 40:
-            reward += 5
-
-        if ball_y > platform_y:
-            reward -= 10
-        if ball_x < platform_x or ball_x > platform_x + 40:
-            reward -= 5
-
-        return reward
+        q_predict = self.q_table[state][action]
+        q_target = reward + self.gamma * max(self.q_table[next_state])
+        self.q_table[state][action] += self.alpha * (q_target - q_predict)
 
 class MLPlay:
     def __init__(self, ai_name, *args, **kwargs):
-        self.ai_name = ai_name
-        self.q_learning = QLearning()
         self.ball_served = False
+        self.side = ai_name
+        self.ql = QLearning()  # 創建 QLearning 對象
+        self.previous_state = None
+        self.previous_action = None
 
-    def update(self, scene_info, *args, **kwargs):
-        q_learning = QLearning()
-        
-        if  'state' not in globals() or state is None:
-            state = self.q_learning.state(scene_info) 
-        if 'action' not in globals() or action is None:
-            action = 1
-            
-
-        if scene_info["status"] in ["GAME_OVER", "GAME_PASS"]:
+    def update(self, scene_info, keyboard=[], *args, **kwargs):
+        """
+        根據接收到的場景信息生成命令
+        """
+        if scene_info["status"] != "GAME_ALIVE":
+            # 重置遊戲狀態
+            self.previous_state = None
+            self.previous_action = None
             return "RESET"
-        #訓練模型
-        state_ = self.q_learning.state(scene_info)        
-        reward = self.q_learning.reward(state, state_, action, scene_info)
-        q_learning.learn(state, action, reward, next_state=state_)
-        state=state_
+            
+        # 從 CSV 文件讀取 Q 表
+        self.ql.q_table_read("q_table.csv")
         
-        print(f"Selected Action: {action}")
-        
+        current_state = self.ql.state(scene_info)
 
-        
         if not self.ball_served:
-            command = "SERVE_TO_LEFT"
             self.ball_served = True
+            return "SERVE_TO_LEFT"
         else:
-            action = self.q_learning.choose_action(state)
-            if action == 0:
-                command = "MOVE_LEFT"
-            elif action == 1:
-                command = "STAY"
-            else:
-                command = "MOVE_RIGHT" # action
+            # 根據當前狀態選擇動作
+            action_idx = self.ql.choose_action(current_state)
+            actions = ["MOVE_LEFT", "NONE", "MOVE_RIGHT"]
+            action = actions[action_idx]
+            
+            # 獎勵系統 (這裡可以根據具體情況修改)
+            reward = self.ql.reward(current_state)
 
-        return command
+            # 在新狀態下學習
+            if self.previous_state is not None and self.previous_action is not None:
+                self.ql.learn(self.previous_state, self.previous_action, reward, current_state)
+                
+            self.ql.q_table_save("q_table.csv")
+
+            # 更新前一狀態和動作
+            self.previous_state = current_state
+            self.previous_action = action_idx
+            return action
 
     def reset(self):
+        """
+        重置狀態
+        """
         self.ball_served = False
